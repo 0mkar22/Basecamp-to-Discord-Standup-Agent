@@ -1,5 +1,7 @@
 import * as dotenv from 'dotenv';
 import { getModel, complete, Context } from '@mariozechner/pi-ai';
+import { Octokit } from '@octokit/rest';
+import sodium from 'libsodium-wrappers';
 
 // Load environment variables from the .env file
 dotenv.config();
@@ -12,8 +14,101 @@ function getBasecampHeaders() {
         "Authorization": `Bearer ${process.env.BASECAMP_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
         // Basecamp STRICTLY requires a User-Agent with contact info, or they block the request.
-        "User-Agent": "StandupBot/1.0 (your-email@yourcompany.com)" 
+        "User-Agent": "StandupBot/1.0 (obhogate48@gmail.com)" 
     };
+}
+
+async function refreshBasecampToken(): Promise<string> {
+    const clientId = process.env.BASECAMP_CLIENT_ID;
+    const clientSecret = process.env.BASECAMP_CLIENT_SECRET;
+    const refreshToken = process.env.BASECAMP_REFRESH_TOKEN;
+
+    // 🔥 ADD THIS TEMPORARY LINE:
+    console.log("DEBUG CREDS:", { clientId, clientSecret, refreshToken: !!refreshToken });
+
+    if (!clientId || !clientSecret || !refreshToken) {
+        throw new Error("Missing credentials for token renewal.");
+    }
+
+    console.log("🔄 Basecamp token expired. Attempting to refresh...");
+
+    const payload = new URLSearchParams({
+        type: 'refresh',
+        refresh_token: refreshToken,
+        client_id: clientId,
+        client_secret: clientSecret
+    });
+
+    const response = await fetch('https://launchpad.37signals.com/authorization/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: payload.toString()
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to refresh Basecamp token: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log("✅ Successfully generated a new Basecamp access token!");
+    
+    // 🔥 NEW: Update the environment variables in memory for the current run
+    process.env.BASECAMP_ACCESS_TOKEN = data.access_token;
+    process.env.BASECAMP_REFRESH_TOKEN = data.refresh_token;
+    
+    // 🔥 NEW: Save the new access token (and refresh token) securely to GitHub for tomorrow
+    await updateGitHubSecret('BASECAMP_ACCESS_TOKEN', data.access_token);
+    
+    if (data.refresh_token) {
+        process.env.BASECAMP_REFRESH_TOKEN = data.refresh_token;
+        await updateGitHubSecret('BASECAMP_REFRESH_TOKEN', data.refresh_token);
+    }
+
+    return data.access_token; 
+}
+
+// ==========================================
+// SECURE GITHUB SECRET UPDATER
+// ==========================================
+async function updateGitHubSecret(secretName: string, secretValue: string) {
+    const owner = process.env.REPO_OWNER; // e.g., "your-username"
+    const repo = process.env.REPO_NAME;   // e.g., "standup-bot"
+    const githubToken = process.env.MY_GITHUB_PAT; // Your Personal Access Token
+
+    if (!owner || !repo || !githubToken) {
+        throw new Error("Missing GitHub configuration in environment variables.");
+    }
+
+    const octokit = new Octokit({ auth: githubToken });
+
+    try {
+        // 1. Fetch the repository's public key
+        const { data: publicKeyData } = await octokit.rest.actions.getRepoPublicKey({
+            owner,
+            repo,
+        });
+
+        // 2. Encrypt the secret using libsodium
+        await sodium.ready;
+        const binkey = sodium.from_base64(publicKeyData.key, sodium.base64_variants.ORIGINAL);
+        const binsec = sodium.from_string(secretValue);
+        const encBytes = sodium.crypto_box_seal(binsec, binkey);
+        const encryptedValue = sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
+
+        // 3. Upload the newly encrypted secret
+        await octokit.rest.actions.createOrUpdateRepoSecret({
+            owner,
+            repo,
+            secret_name: secretName,
+            encrypted_value: encryptedValue,
+            key_id: publicKeyData.key_id,
+        });
+        
+        console.log(`🔐 Successfully updated GitHub secret: ${secretName}`);
+    } catch (error) {
+        console.error(`❌ Failed to update GitHub secret (${secretName}):`, error);
+        throw error;
+    }
 }
 
 // ==========================================
