@@ -21,18 +21,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Use your current Node version
+          node-version: '22' # Use your current Node version
 
       # 3. Install dependencies (Continuous Integration)
       - name: Install dependencies
         run: npm install
 
-      # 4. Compile TypeScript to JavaScript
-      - name: Build TypeScript
-        run: npx tsc
-
       # 5. Run the script (Continuous Deployment / Execution)
       - name: Run Standup Agent
+        run: npx tsx index.ts
         env:
           BASECAMP_ACCESS_TOKEN: ${{ secrets.BASECAMP_ACCESS_TOKEN }}
           BASECAMP_ACCOUNT_ID: ${{ secrets.BASECAMP_ACCOUNT_ID }}
