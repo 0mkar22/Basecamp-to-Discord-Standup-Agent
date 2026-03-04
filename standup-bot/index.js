@@ -64,8 +64,8 @@ function fetchBasecampTasks(projectId) {
                     if (!accountId || !process.env.BASECAMP_ACCESS_TOKEN) {
                         throw new Error("Missing Basecamp environment variables in .env file.");
                     }
-                    baseUrl = "https://3.basecampapi.com/".concat(accountId, "/buckets/").concat(projectId);
-                    return [4 /*yield*/, fetch("".concat(baseUrl, "/events.json"), {
+                    baseUrl = "https://3.basecampapi.com/".concat(accountId, "/projects/").concat(projectId);
+                    return [4 /*yield*/, fetch("".concat(baseUrl, "/timeline.json"), {
                             method: 'GET',
                             headers: getBasecampHeaders()
                         })];
