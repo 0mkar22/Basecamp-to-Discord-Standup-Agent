@@ -27,10 +27,10 @@ async function fetchBasecampTasks(projectId: string) {
     }
 
     // Basecamp 3 API URL structure
-    const baseUrl = `https://3.basecampapi.com/${accountId}/buckets/${projectId}`;
+    const baseUrl = `https://3.basecampapi.com/${accountId}/projects/${projectId}`;
 
     // Fetch the project's recent events
-    const response = await fetch(`${baseUrl}/events.json`, {
+    const response = await fetch(`${baseUrl}/timeline.json`, {
         method: 'GET',
         headers: getBasecampHeaders()
     });
