@@ -4,7 +4,9 @@ import { getModel, complete, Context } from '@mariozechner/pi-ai';
 // Load environment variables from the .env file
 dotenv.config();
 
-// Helper function to handle Basecamp's strict header requirements
+// ==========================================
+// 1. HELPER FUNCTIONS & CONFIG
+// ==========================================
 function getBasecampHeaders() {
     return {
         "Authorization": `Bearer ${process.env.BASECAMP_ACCESS_TOKEN}`,
@@ -14,25 +16,27 @@ function getBasecampHeaders() {
     };
 }
 
-async function fetchBasecampTasks() {
+// ==========================================
+// 2. FETCH DATA FROM BASECAMP (Option 1's 24h filter)
+// ==========================================
+async function fetchBasecampTasks(projectId: string) {
     const accountId = process.env.BASECAMP_ACCOUNT_ID;
-    const projectId = process.env.BASECAMP_PROJECT_ID;
 
-    if (!accountId || !projectId || !process.env.BASECAMP_ACCESS_TOKEN) {
+    if (!accountId || !process.env.BASECAMP_ACCESS_TOKEN) {
         throw new Error("Missing Basecamp environment variables in .env file.");
     }
 
     // Basecamp 3 API URL structure
     const baseUrl = `https://3.basecampapi.com/${accountId}/buckets/${projectId}`;
 
-    // Fetch the project's recent events (this includes completed tasks, new tasks, etc.)
+    // Fetch the project's recent events
     const response = await fetch(`${baseUrl}/events.json`, {
         method: 'GET',
         headers: getBasecampHeaders()
     });
 
     if (!response.ok) {
-        throw new Error(`Basecamp API Error: ${response.status} ${response.statusText}`);
+        throw new Error(`Basecamp API Error for project ${projectId}: ${response.status} ${response.statusText}`);
     }
 
     const allEvents = await response.json();
@@ -45,43 +49,40 @@ async function fetchBasecampTasks() {
         return new Date(event.created_at) >= yesterday;
     });
 
-    console.log(`📥 Fetched ${recentEvents.length} events from the last 24 hours.`);
+    console.log(`📥 Fetched ${recentEvents.length} events from the last 24 hours for project ${projectId}.`);
     
-    // We return this raw data object so the AI can read it in Step 3
-    return {
-        report_date: new Date().toISOString(),
-        events: recentEvents
-    };
+    // Return just the events if there are any, otherwise return null
+    return recentEvents.length > 0 ? recentEvents : null;
 }
 
+// ==========================================
+// 3. PROCESS WITH AI (Option 1's strict parsing)
+// ==========================================
 async function generateStandupSummary(basecampData: any) {
-    // 1. Select the model. You can change this to 'anthropic' and 'claude-3-5-sonnet' if preferred!
     const model = getModel('google', 'gemini-2.5-flash');
 
-    // 2. Build the context and instructions for the AI
     const context: Context = {
         systemPrompt: `You are an upbeat, highly organized engineering project manager. 
-        Your job is to read raw JSON event data from Basecamp and write a daily standup summary for the team's Discord channel.
+        Your job is to read raw JSON event data from multiple Basecamp projects and write a combined daily standup summary for the team's Discord channel.
         Ignore minor events like formatting changes or document tweaks.
         Focus strictly on:
         1. Tasks that were COMPLETED yesterday.
         2. Tasks that are DUE today or were newly ASSIGNED.
 
-        Format the output in clean, readable Discord Markdown (using bolding and emojis). 
+        Format the output in clean, readable Discord Markdown (using bolding and emojis). Group by Project.
         Keep it concise and friendly. Do not include any introductory fluff or JSON blocks in your final output.`,
         messages: [
             { 
                 role: 'user', 
-                content: `Here is the raw Basecamp data for the last 24 hours: \n\n${JSON.stringify(basecampData, null, 2)}`,
+                content: `Here is the raw Basecamp data grouped by project for the last 24 hours: \n\n${JSON.stringify(basecampData, null, 2)}`,
                 timestamp: Date.now()
             }
         ]
     };
 
-    // 3. Send the context to the model and await the complete response
     const response = await complete(model, context);
 
-    // 4. Extract the generated text from the response blocks
+    // Extract the generated text from the response blocks
     let summaryText = "";
     for (const block of response.content) {
         if (block.type === 'text') {
@@ -97,6 +98,9 @@ async function generateStandupSummary(basecampData: any) {
     return summaryText;
 }
 
+// ==========================================
+// 4. POST TO DISCORD
+// ==========================================
 async function postToDiscord(summaryMarkdown: string) {
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
 
@@ -104,21 +108,17 @@ async function postToDiscord(summaryMarkdown: string) {
         throw new Error("Missing DISCORD_WEBHOOK_URL in .env file.");
     }
 
-    // Discord expects a JSON payload with a "content" field
     const payload = {
         content: `**🌞 Good morning, team! Here is your daily standup:**\n\n${summaryMarkdown}`,
-        // Optional: You can change the username and avatar of the bot here
         username: "Basecamp Standup Bot", 
-        avatar_url: "https://i.imgur.com/8nLFCVP.png" // Replace with your company logo URL
+        avatar_url: "https://i.imgur.com/8nLFCVP.png" 
     };
 
     console.log("📤 Sending summary to Discord...");
 
     const response = await fetch(webhookUrl, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
 
@@ -129,16 +129,37 @@ async function postToDiscord(summaryMarkdown: string) {
     console.log("✅ Message successfully delivered to Discord!");
 }
 
-// Main execution function
+// ==========================================
+// 5. MAIN ORCHESTRATOR (Option 2's loop)
+// ==========================================
 async function main() {
     console.log("🚀 Starting Daily Standup Agent...");
 
     try {
-        console.log("1️⃣ Fetching data from Basecamp...");
-        const rawData = await fetchBasecampTasks();
+        // Parse project IDs from .env (comma-separated, e.g., "12345,67890")
+        const projectIdsString = process.env.BASECAMP_PROJECT_IDS;
+        if (!projectIdsString) throw new Error("Missing BASECAMP_PROJECT_IDS in .env file.");
+        
+        const projectIds = projectIdsString.split(',').map(id => id.trim());
+        const allProjectsData: Record<string, any> = {};
+
+        console.log("1️⃣ Fetching data from Basecamp projects...");
+        
+        for (const projectId of projectIds) {
+            const data = await fetchBasecampTasks(projectId);
+            // Only add to payload if there was actual activity to save AI tokens
+            if (data) {
+                allProjectsData[`Project_${projectId}`] = data;
+            }
+        }
+
+        if (Object.keys(allProjectsData).length === 0) {
+            console.log("😴 No activity in any projects in the last 24 hours. Skipping summary.");
+            return; // Exit successfully
+        }
 
         console.log("2️⃣ Processing data with AI...");
-        const summary = await generateStandupSummary(rawData);
+        const summary = await generateStandupSummary(allProjectsData);
 
         console.log("3️⃣ Broadcasting to Discord...");
         await postToDiscord(summary);
