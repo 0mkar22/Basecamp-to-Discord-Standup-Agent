@@ -27,7 +27,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. Run the script (Continuous Deployment / Execution)
+        # 4. Compile TypeScript to JavaScript
+      - name: Build TypeScript
+        run: npx tsc
+
+      # 5. Run the script (Continuous Deployment / Execution)
       - name: Run Standup Agent
         env:
           BASECAMP_ACCESS_TOKEN: ${{ secrets.BASECAMP_ACCESS_TOKEN }}
