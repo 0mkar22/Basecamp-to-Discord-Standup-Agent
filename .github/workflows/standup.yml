@@ -34,14 +34,17 @@ jobs:
       # 5. Run the script (Continuous Deployment / Execution)
       - name: Run Standup Agent
         env:
-          BASECAMP_PROJECT_IDS: ${{ secrets.BASECAMP_PROJECT_IDS }}
+          # These use vars because they are in the bottom list
+          BASECAMP_PROJECT_IDS: ${{ vars.BASECAMP_PROJECT_IDS }}
+          REPO_NAME: ${{ vars.REPO_NAME }}
+          REPO_OWNER: ${{ vars.REPO_OWNER }}
+          
+          # These stay as secrets because they are in the top list
           BASECAMP_ACCOUNT_ID: ${{ secrets.BASECAMP_ACCOUNT_ID }}
           BASECAMP_ACCESS_TOKEN: ${{ secrets.BASECAMP_ACCESS_TOKEN }}
           BASECAMP_REFRESH_TOKEN: ${{ secrets.BASECAMP_REFRESH_TOKEN }}
           BASECAMP_CLIENT_ID: ${{ secrets.BASECAMP_CLIENT_ID }}
           BASECAMP_CLIENT_SECRET: ${{ secrets.BASECAMP_CLIENT_SECRET }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          REPO_OWNER: ${{ secrets.REPO_OWNER }}
-          REPO_NAME: ${{ secrets.REPO_NAME }}
           MY_GITHUB_PAT: ${{ secrets.MY_GITHUB_PAT }}
         run: node dist/standup-bot/index.js # Make sure this matches where tsc outputs your compiled code
