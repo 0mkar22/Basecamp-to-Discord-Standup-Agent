@@ -11,7 +11,6 @@ on:
 jobs:
   run-standup:
     runs-on: ubuntu-latest
-    environment: secrets
 
     steps:
       # 1. Grab your code from the repository
