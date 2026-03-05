@@ -35,6 +35,7 @@ jobs:
       - name: Run Standup Agent
         env:
           BASECAMP_PROJECT_IDS: ${{ secrets.BASECAMP_PROJECT_IDS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REPO_NAME: ${{ secrets.REPO_NAME }}
           REPO_OWNER: ${{ secrets.REPO_OWNER }}
           BASECAMP_ACCOUNT_ID: ${{ secrets.BASECAMP_ACCOUNT_ID }}
