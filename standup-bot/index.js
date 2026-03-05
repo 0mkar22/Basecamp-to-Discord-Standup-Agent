@@ -183,11 +183,25 @@ function fetchBasecampTasks(projectId) {
                         })];
                 case 1:
                     response = _a.sent();
+                    if (!(response.status === 401)) return [3 /*break*/, 4];
+                    console.log("Token might be expired for project ".concat(projectId, ". Refreshing..."));
+                    return [4 /*yield*/, refreshBasecampToken()];
+                case 2:
+                    _a.sent();
+                    return [4 /*yield*/, fetch("".concat(baseUrl, "/timeline.json"), {
+                            method: 'GET',
+                            headers: getBasecampHeaders()
+                        })];
+                case 3:
+                    // Retry with the freshly generated headers
+                    response = _a.sent();
+                    _a.label = 4;
+                case 4:
                     if (!response.ok) {
                         throw new Error("Basecamp API Error for project ".concat(projectId, ": ").concat(response.status, " ").concat(response.statusText));
                     }
                     return [4 /*yield*/, response.json()];
-                case 2:
+                case 5:
                     allEvents = _a.sent();
                     yesterday = new Date();
                     yesterday.setDate(yesterday.getDate() - 1);
@@ -195,7 +209,6 @@ function fetchBasecampTasks(projectId) {
                         return new Date(event.created_at) >= yesterday;
                     });
                     console.log("\uD83D\uDCE5 Fetched ".concat(recentEvents.length, " events from the last 24 hours for project ").concat(projectId, "."));
-                    // Return just the events if there are any, otherwise return null
                     return [2 /*return*/, recentEvents.length > 0 ? recentEvents : null];
             }
         });
@@ -219,7 +232,7 @@ function generateStandupSummary(basecampData) {
                         messages: [
                             {
                                 role: 'user',
-                                content: "Here is the recent activity data:\n".concat(JSON.stringify(basecampData).substring(0, 3000)),
+                                content: "Here is the recent activity data:\n".concat(JSON.stringify(basecampData)),
                                 timestamp: Date.now()
                             }
                         ]

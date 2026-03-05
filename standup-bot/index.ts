@@ -121,14 +121,25 @@ async function fetchBasecampTasks(projectId: string) {
         throw new Error("Missing Basecamp environment variables in .env file.");
     }
 
-    // Basecamp 3 API URL structure
     const baseUrl = `https://3.basecampapi.com/${accountId}/projects/${projectId}`;
 
-    // Fetch the project's recent events
-    const response = await fetch(`${baseUrl}/timeline.json`, {
+    // First attempt
+    let response = await fetch(`${baseUrl}/timeline.json`, {
         method: 'GET',
         headers: getBasecampHeaders()
     });
+
+    // 🔥 THE FIX: Catch the expired token, refresh it, and retry!
+    if (response.status === 401) {
+        console.log(`Token might be expired for project ${projectId}. Refreshing...`);
+        await refreshBasecampToken(); 
+        
+        // Retry with the freshly generated headers
+        response = await fetch(`${baseUrl}/timeline.json`, {
+            method: 'GET',
+            headers: getBasecampHeaders()
+        });
+    }
 
     if (!response.ok) {
         throw new Error(`Basecamp API Error for project ${projectId}: ${response.status} ${response.statusText}`);
@@ -146,7 +157,6 @@ async function fetchBasecampTasks(projectId: string) {
 
     console.log(`📥 Fetched ${recentEvents.length} events from the last 24 hours for project ${projectId}.`);
     
-    // Return just the events if there are any, otherwise return null
     return recentEvents.length > 0 ? recentEvents : null;
 }
 
@@ -176,7 +186,7 @@ async function generateStandupSummary(basecampData: any): Promise<string> {
       messages: [
         { 
           role: 'user', 
-          content: `Here is the recent activity data:\n${JSON.stringify(basecampData).substring(0, 3000)}`,
+          content: `Here is the recent activity data:\n${JSON.stringify(basecampData)}`,
           timestamp: Date.now() 
         }
       ]
