@@ -107,6 +107,31 @@ function refreshBasecampToken() {
         });
     });
 }
+// Add this helper function
+function fetchAllActiveProjectIds() {
+    return __awaiter(this, void 0, void 0, function () {
+        var accountId, response, projects;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    accountId = process.env.BASECAMP_ACCOUNT_ID;
+                    return [4 /*yield*/, fetch("https://3.basecampapi.com/".concat(accountId, "/projects.json"), {
+                            method: 'GET',
+                            headers: getBasecampHeaders()
+                        })];
+                case 1:
+                    response = _a.sent();
+                    if (!response.ok)
+                        throw new Error("Failed to fetch projects list.");
+                    return [4 /*yield*/, response.json()];
+                case 2:
+                    projects = _a.sent();
+                    // Map through the projects and return just their IDs
+                    return [2 /*return*/, projects.map(function (proj) { return proj.id.toString(); })];
+            }
+        });
+    });
+}
 // ==========================================
 // SECURE GITHUB SECRET UPDATER
 // ==========================================
@@ -295,57 +320,56 @@ function postToDiscord(summaryMarkdown) {
 // ==========================================
 function main() {
     return __awaiter(this, void 0, void 0, function () {
-        var projectIdsString, projectIds, allProjectsData, _i, projectIds_1, projectId, data, summary, error_2;
+        var projectIds, allProjectsData, _i, projectIds_1, projectId, data, summary, error_2;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     console.log("🚀 Starting Daily Standup Agent...");
                     _a.label = 1;
                 case 1:
-                    _a.trys.push([1, 8, , 9]);
-                    projectIdsString = process.env.BASECAMP_PROJECT_IDS;
-                    if (!projectIdsString)
-                        throw new Error("Missing BASECAMP_PROJECT_IDS in .env file.");
-                    projectIds = projectIdsString.split(',').map(function (id) { return id.trim(); });
+                    _a.trys.push([1, 9, , 10]);
+                    return [4 /*yield*/, fetchAllActiveProjectIds()];
+                case 2:
+                    projectIds = _a.sent();
                     allProjectsData = {};
                     console.log("1️⃣ Fetching data from Basecamp projects...");
                     _i = 0, projectIds_1 = projectIds;
-                    _a.label = 2;
-                case 2:
-                    if (!(_i < projectIds_1.length)) return [3 /*break*/, 5];
+                    _a.label = 3;
+                case 3:
+                    if (!(_i < projectIds_1.length)) return [3 /*break*/, 6];
                     projectId = projectIds_1[_i];
                     return [4 /*yield*/, fetchBasecampTasks(projectId)];
-                case 3:
+                case 4:
                     data = _a.sent();
                     // Only add to payload if there was actual activity to save AI tokens
                     if (data) {
                         allProjectsData["Project_".concat(projectId)] = data;
                     }
-                    _a.label = 4;
-                case 4:
-                    _i++;
-                    return [3 /*break*/, 2];
+                    _a.label = 5;
                 case 5:
+                    _i++;
+                    return [3 /*break*/, 3];
+                case 6:
                     if (Object.keys(allProjectsData).length === 0) {
                         console.log("😴 No activity in any projects in the last 24 hours. Skipping summary.");
                         return [2 /*return*/]; // Exit successfully
                     }
                     console.log("2️⃣ Processing data with AI...");
                     return [4 /*yield*/, generateStandupSummary(allProjectsData)];
-                case 6:
+                case 7:
                     summary = _a.sent();
                     console.log("3️⃣ Broadcasting to Discord...");
                     return [4 /*yield*/, postToDiscord(summary)];
-                case 7:
+                case 8:
                     _a.sent();
                     console.log("✅ Standup posted successfully!");
-                    return [3 /*break*/, 9];
-                case 8:
+                    return [3 /*break*/, 10];
+                case 9:
                     error_2 = _a.sent();
                     console.error("❌ Fatal Error in Standup Agent:", error_2);
                     process.exit(1);
-                    return [3 /*break*/, 9];
-                case 9: return [2 /*return*/];
+                    return [3 /*break*/, 10];
+                case 10: return [2 /*return*/];
             }
         });
     });
