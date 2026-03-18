@@ -207,3 +207,81 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
         return "Failed to sync to Basecamp due to a server error.";
     }
 }
+
+export async function completeTask_Basecamp(projectId: string, taskId: string): Promise<boolean> {
+    console.log(`\n⚙️ --- BASECAMP ADAPTER: COMPLETING TASK --- ⚙️`);
+    console.log(`🎯 Target Project ID: ${projectId}`);
+    console.log(`✅ Target Task ID: ${taskId}`);
+
+    const accountId = process.env.BASECAMP_ACCOUNT_ID;
+    const token = process.env.BASECAMP_ACCESS_TOKEN; // Or however you authenticate with Basecamp
+
+    try {
+        const response = await fetch(`https://3.basecampapi.com/${accountId}/buckets/${projectId}/todos/${taskId}/completion.json`, {
+            method: 'POST', // Basecamp uses POST to complete a task
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'Tron Automation Agent (obhogate48@gmail.com)'
+            }
+        });
+
+        if (response.ok) {
+            console.log(`✅ Status: Task ${taskId} successfully marked as completed in Basecamp!`);
+            return true;
+        } else {
+            console.error(`❌ Basecamp API returned status: ${response.status}`);
+            return false;
+        }
+    } catch (error: any) {
+        console.error(`❌ Failed to complete Basecamp task: ${error.message}`);
+        return false;
+    }
+}
+
+export async function searchBasecampProject(targetProjectName: string): Promise<string | null> {
+    console.log(`\n🎯 Searching Basecamp for Project: '${targetProjectName}'...`);
+    
+    const accountId = process.env.BASECAMP_ACCOUNT_ID;
+    const token = process.env.BASECAMP_ACCESS_TOKEN; // Or however you authenticate
+
+    if (!accountId || !token) {
+        console.error("❌ Missing BASECAMP_ACCOUNT_ID or BASECAMP_ACCESS_TOKEN in .env");
+        return null;
+    }
+
+    try {
+        // Fetch all projects this Basecamp account has access to
+        const response = await fetch(`https://3.basecampapi.com/${accountId}/projects.json`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'User-Agent': 'Tron Automation Agent (your@email.com)'
+            }
+        });
+
+        if (!response.ok) {
+            console.error(`❌ Failed to fetch Basecamp projects. API Status: ${response.status}`);
+            return null;
+        }
+
+        const projects = await response.json();
+        
+        // Loop through the projects and find the exact match (case-insensitive just in case)
+        const matchedProject = projects.find((p: any) => 
+            p.name.toLowerCase() === targetProjectName.toLowerCase()
+        );
+
+        if (matchedProject) {
+            console.log(`✅ Found Basecamp Project! ID: ${matchedProject.id}`);
+            return matchedProject.id.toString(); // Return the ID so server.ts can use it!
+        } else {
+            console.error(`❌ Project '${targetProjectName}' not found in Basecamp.`);
+            return null;
+        }
+
+    } catch (error: any) {
+        console.error(`❌ Error searching Basecamp projects: ${error.message}`);
+        return null;
+    }
+}

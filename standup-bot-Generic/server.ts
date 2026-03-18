@@ -2,7 +2,7 @@ import express from 'express';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import { generateStandupSummary, processGitHubWebhookWithAI, processPMWebhookWithAI } from './ai';
-import { fetchAllActiveProjectIds, fetchBasecampTasks } from './basecamp';
+import { completeTask_Basecamp, fetchAllActiveProjectIds, fetchBasecampTasks, searchBasecampProject } from './basecamp';
 import { postToDiscord } from './discord';
 
 dotenv.config();
@@ -68,6 +68,7 @@ app.post('/github-webhook', async (req, res) => {
     res.status(200).send('OK');
     const githubEvent = req.headers['x-github-event'];
     
+    // 🚀 SCENARIO A: A Developer Pushed Code
     if (githubEvent === 'push') {
         const repoName = req.body.repository.name;
         const pusherName = req.body.pusher.name;
@@ -99,6 +100,44 @@ app.post('/github-webhook', async (req, res) => {
             
         } else {
             console.log(`⚠️ UNAUTHORIZED REPO (${repoName}). Blocked.`);
+        }
+    }
+    // 🎯 SCENARIO B: A Developer Closed an Issue
+    else if (githubEvent === 'issues' && req.body?.action === 'closed') {
+        console.log(`\n🚨 [GITHUB EVENT] Issue Closed: ${req.body?.issue?.title}`);
+        
+        const issueBody = String(req.body?.issue?.body || "");
+        const repoName = req.body?.repository?.name; // ⬅️ Get the repo name from GitHub!
+
+        // 🛡️ THE BULLETPROOF REGEX
+        const regex = new RegExp("<!-- Basecamp Task ID: ([^>]+) -->", "i");
+        const idMatch = issueBody.match(regex);
+
+        if (idMatch !== null && idMatch[1]) {
+            const basecampTaskId = idMatch[1].trim(); 
+            console.log(`🔗 Found tethered Basecamp Task ID: ${basecampTaskId}`);
+            
+            // 🗺️ THE DYNAMIC LOOKUP: Check config.json for this repo
+            const mapping = config.authorized_repos.find(repo => repo.githubRepo === repoName);
+            
+            if (mapping && mapping.pmProvider === 'basecamp') {
+                console.log(`🔍 Looking up Basecamp Project ID for: '${mapping.pmProjectName}'...`);
+                
+                // Use your existing search function from basecamp.ts!
+                const basecampProjectId = await searchBasecampProject(mapping.pmProjectName);
+
+                if (basecampProjectId) {
+                    await completeTask_Basecamp(basecampProjectId, basecampTaskId);
+                    await postToDiscord(`✅ **Auto-Sync:** Issue *${req.body?.issue?.title}* was closed. Tron checked it off in Basecamp!`);
+                } else {
+                    console.log(`❌ Could not find a Basecamp project named ${mapping.pmProjectName}`);
+                }
+            } else {
+                console.log(`🤷‍♂️ Repo ${repoName} is not mapped to Basecamp in config.json.`);
+            }
+            
+        } else {
+            console.log(`🤷‍♂️ No hidden Basecamp ID found in this issue. Ignoring.`);
         }
     }
 });
