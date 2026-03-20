@@ -1,6 +1,7 @@
 import express from 'express';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
+import crypto from 'crypto';
 import { generateStandupSummary, processGitHubWebhookWithAI, processPMWebhookWithAI } from './ai';
 import { completeTask_Basecamp, fetchAllActiveProjectIds, fetchBasecampTasks, searchBasecampProject } from './basecamp';
 import { postToDiscord } from './discord';
@@ -19,7 +20,12 @@ for (const envVar of requiredEnvVars) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// 🛡️ THE IRON GATE: We must save the raw, unformatted payload for HMAC cryptography!
+app.use(express.json({
+    verify: (req: any, res, buf) => {
+        req.rawBody = buf;
+    }
+}));
 
 // 🛡️ PRODUCTION CLEANUP 2: Strict TypeScript Interfaces
 interface RepoMapping {
@@ -41,6 +47,27 @@ try {
 app.get('/', (req, res) => {
     res.send('🤖 Tron Universal DevOps Router is Online.');
 });
+
+// 🛡️ THE IRON GATE BOUNCER FUNCTION
+function verifyGitHubSignature(req: any): boolean {
+    const signature = req.headers['x-hub-signature-256'];
+    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+
+    if (!secret || !signature || !req.rawBody) {
+        return false; // Automatically fail if anything is missing
+    }
+
+    // Do the exact same SHA-256 math that GitHub did
+    const hmac = crypto.createHmac('sha256', secret);
+    const digest = 'sha256=' + hmac.update(req.rawBody).digest('hex');
+
+    // Compare our math with GitHub's math safely to prevent timing attacks
+    try {
+        return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature as string));
+    } catch (e) {
+        return false;
+    }
+}
 
 // ROUTE 1: The Daily Standup Generator
 app.post('/webhook', async (req, res) => {
@@ -65,7 +92,14 @@ app.post('/webhook', async (req, res) => {
 // ROUTE 2: Universal Version Control Webhook (e.g. GitHub)
 // ---------------------------------------------------------
 app.post('/github-webhook', async (req, res) => {
-    res.status(200).send('OK');
+    
+    // 🛑 THE IRON GATE CHECK
+    if (!verifyGitHubSignature(req)) {
+        console.error("🚨 INTRUDER ALERT: Invalid GitHub Webhook Signature Detected!");
+        return res.status(401).send("Unauthorized");
+    }
+
+    res.status(200).send('OK'); // It's legit! Acknowledge quickly.
     const githubEvent = req.headers['x-github-event'];
     
     // 🚀 SCENARIO A: A Developer Pushed Code
@@ -143,10 +177,20 @@ app.post('/github-webhook', async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// ROUTE 3: Universal Project Management Webhook (PM -> Dev Flow)
+// ROUTE 3: Universal PM Webhook (PM -> Dev Flow)
 // ---------------------------------------------------------
 app.post('/pm-webhook/:provider', async (req, res) => {
-    res.status(200).send('OK');
+    
+    // 🛑 THE UNIVERSAL IRON GATE
+    const providedToken = req.query.token;
+    const expectedToken = process.env.UNIVERSAL_WEBHOOK_SECRET;
+
+    if (!providedToken || providedToken !== expectedToken) {
+        console.error(`🚨 INTRUDER ALERT: Unauthorized access attempt to /pm-webhook/${req.params.provider}`);
+        return res.status(401).send("Unauthorized");
+    }
+
+    res.status(200).send('Webhook received'); // Acknowledge quickly
     const provider = req.params.provider; 
     
     const kind = req.body.kind || "unknown_event";

@@ -15,6 +15,49 @@ export function getBasecampHeaders() {
     };
 }
 
+// 🔋 Keep both tokens in active memory!
+let activeAccessToken = process.env.BASECAMP_ACCESS_TOKEN;
+let activeRefreshToken = process.env.BASECAMP_REFRESH_TOKEN;
+
+// 🔄 THE AUTO-REFRESH ENGINE
+async function refreshBasecampToken(): Promise<boolean> {
+    console.log(`\n🔄 [OAUTH] Access Token expired! Attempting to refresh...`);
+
+    const clientId = process.env.BASECAMP_CLIENT_ID;
+    const clientSecret = process.env.BASECAMP_CLIENT_SECRET;
+
+    if (!activeRefreshToken || !clientId || !clientSecret) {
+        console.error("❌ Missing OAuth credentials. Cannot refresh token.");
+        return false;
+    }
+
+    try {
+        // Use activeRefreshToken here, not process.env!
+        const response = await fetch(`https://launchpad.37signals.com/authorization/token?type=refresh&refresh_token=${activeRefreshToken}&client_id=${clientId}&client_secret=${clientSecret}`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            console.error(`❌ OAuth Refresh Failed. Status: ${response.status}`);
+            return false;
+        }
+
+        const data = await response.json();
+        
+        // 🔋 Update BOTH tokens in memory!
+        activeAccessToken = data.access_token;
+        if (data.refresh_token) {
+            activeRefreshToken = data.refresh_token; 
+        }
+        
+        console.log(`✅ [OAUTH] Successfully generated new Access Token and Refresh Token!`);
+        return true;
+    } catch (error: any) {
+        console.error(`❌ Error during token refresh: ${error.message}`);
+        return false;
+    }
+}
+
 // Brought over from your original index.ts!
 async function updateGitHubSecret(secretName: string, secretValue: string) {
     const owner = process.env.REPO_OWNER;
@@ -39,43 +82,6 @@ async function updateGitHubSecret(secretName: string, secretValue: string) {
     } catch (error) {
         console.error(`❌ Failed to update GitHub secret (${secretName}):`, error);
     }
-}
-
-async function refreshBasecampToken(): Promise<string> {
-    const clientId = process.env.BASECAMP_CLIENT_ID;
-    const clientSecret = process.env.BASECAMP_CLIENT_SECRET;
-    const refreshToken = process.env.BASECAMP_REFRESH_TOKEN;
-
-    if (!clientId || !clientSecret || !refreshToken) {
-        throw new Error("Missing credentials for token renewal in .env.");
-    }
-
-    console.log("🔄 Basecamp token expired. Attempting to refresh...");
-
-    const payload = new URLSearchParams({
-        type: 'refresh',
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret
-    });
-
-    const response = await fetch('https://launchpad.37signals.com/authorization/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: payload.toString()
-    });
-
-    if (!response.ok) throw new Error("Failed to refresh Basecamp token.");
-
-    const data = await response.json();
-    process.env.BASECAMP_ACCESS_TOKEN = data.access_token;
-    await updateGitHubSecret('BASECAMP_ACCESS_TOKEN', data.access_token);
-    
-    if (data.refresh_token) {
-        process.env.BASECAMP_REFRESH_TOKEN = data.refresh_token;
-        await updateGitHubSecret('BASECAMP_REFRESH_TOKEN', data.refresh_token);
-    }
-    return data.access_token;
 }
 
 // ---------------------------------------------------------
@@ -208,23 +214,42 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
     }
 }
 
-export async function completeTask_Basecamp(projectId: string, taskId: string): Promise<boolean> {
+// 🚨 Notice we added `isRetry: boolean = false` to the arguments!
+export async function completeTask_Basecamp(projectId: string, taskId: string, isRetry: boolean = false): Promise<boolean> {
     console.log(`\n⚙️ --- BASECAMP ADAPTER: COMPLETING TASK --- ⚙️`);
     console.log(`🎯 Target Project ID: ${projectId}`);
     console.log(`✅ Target Task ID: ${taskId}`);
 
     const accountId = process.env.BASECAMP_ACCOUNT_ID;
-    const token = process.env.BASECAMP_ACCESS_TOKEN; // Or however you authenticate with Basecamp
+
+    if (!accountId || !activeAccessToken) {
+        console.error("❌ Missing BASECAMP_ACCOUNT_ID or Access Token");
+        return false;
+    }
 
     try {
         const response = await fetch(`https://3.basecampapi.com/${accountId}/buckets/${projectId}/todos/${taskId}/completion.json`, {
-            method: 'POST', // Basecamp uses POST to complete a task
+            method: 'POST',
             headers: {
-                'Authorization': `Bearer ${token}`,
+                // 🛡️ THE FIX: Use activeAccessToken, NOT process.env!
+                'Authorization': `Bearer ${activeAccessToken}`, 
                 'Content-Type': 'application/json',
-                'User-Agent': 'Tron Automation Agent (obhogate48@gmail.com)'
+                'User-Agent': 'Tron Automation Agent (your@email.com)'
             }
         });
+
+        // 🛡️ THE INTERCEPTOR: Catch the 401 and retry!
+        if (response.status === 401 && !isRetry) {
+            console.log(`⚠️ Basecamp returned 401 Unauthorized for Task Completion.`);
+            const refreshed = await refreshBasecampToken();
+            
+            if (refreshed) {
+                console.log(`🔄 Retrying task completion with new token...`);
+                return await completeTask_Basecamp(projectId, taskId, true); 
+            } else {
+                return false; 
+            }
+        }
 
         if (response.ok) {
             console.log(`✅ Status: Task ${taskId} successfully marked as completed in Basecamp!`);
@@ -239,26 +264,37 @@ export async function completeTask_Basecamp(projectId: string, taskId: string): 
     }
 }
 
-export async function searchBasecampProject(targetProjectName: string): Promise<string | null> {
+export async function searchBasecampProject(targetProjectName: string, isRetry: boolean = false): Promise<string | null> {
     console.log(`\n🎯 Searching Basecamp for Project: '${targetProjectName}'...`);
     
     const accountId = process.env.BASECAMP_ACCOUNT_ID;
-    const token = process.env.BASECAMP_ACCESS_TOKEN; // Or however you authenticate
 
-    if (!accountId || !token) {
-        console.error("❌ Missing BASECAMP_ACCOUNT_ID or BASECAMP_ACCESS_TOKEN in .env");
+    if (!accountId || !activeAccessToken) {
+        console.error("❌ Missing BASECAMP_ACCOUNT_ID or Access Token.");
         return null;
     }
 
     try {
-        // Fetch all projects this Basecamp account has access to
         const response = await fetch(`https://3.basecampapi.com/${accountId}/projects.json`, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${token}`,
+                'Authorization': `Bearer ${activeAccessToken}`, // Use the active memory token!
                 'User-Agent': 'Tron Automation Agent (your@email.com)'
             }
         });
+
+        // 🛡️ THE INTERCEPTOR: Catch the 401!
+        if (response.status === 401 && !isRetry) {
+            console.log(`⚠️ Basecamp returned 401 Unauthorized.`);
+            const refreshed = await refreshBasecampToken();
+            
+            if (refreshed) {
+                // If the refresh worked, recursively call this exact function again!
+                return await searchBasecampProject(targetProjectName, true); 
+            } else {
+                return null; // Refresh failed, give up.
+            }
+        }
 
         if (!response.ok) {
             console.error(`❌ Failed to fetch Basecamp projects. API Status: ${response.status}`);
@@ -266,15 +302,13 @@ export async function searchBasecampProject(targetProjectName: string): Promise<
         }
 
         const projects = await response.json();
-        
-        // Loop through the projects and find the exact match (case-insensitive just in case)
         const matchedProject = projects.find((p: any) => 
             p.name.toLowerCase() === targetProjectName.toLowerCase()
         );
 
         if (matchedProject) {
             console.log(`✅ Found Basecamp Project! ID: ${matchedProject.id}`);
-            return matchedProject.id.toString(); // Return the ID so server.ts can use it!
+            return matchedProject.id.toString();
         } else {
             console.error(`❌ Project '${targetProjectName}' not found in Basecamp.`);
             return null;
