@@ -1,8 +1,8 @@
 {
   "authorized_repos": [
-    {
+     {
       "githubRepo": "Basecamp-to-Discord-Standup-Agent",
-      "pmProvider": "jira",
+      "pmProvider": "basecamp",
       "pmProjectName": "Test for basecamp to discord standup agent" 
     },
     {

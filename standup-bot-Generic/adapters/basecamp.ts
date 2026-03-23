@@ -1,6 +1,7 @@
 import * as dotenv from 'dotenv';
 import { Octokit } from '@octokit/rest';
 import sodium from 'libsodium-wrappers';
+import { PMAdapter } from './PMAdapter'; // 🔌 NEW: Importing the Universal Contract!
 
 dotenv.config();
 
@@ -62,6 +63,14 @@ async function refreshBasecampToken(): Promise<boolean> {
             
             console.log(`✅ [OAUTH] Successfully generated new Access Token and Refresh Token!`);
             
+            // 💾 THE PRODUCTION FIX: Permanently save the new tokens to GitHub Secrets
+            if (activeAccessToken) {
+                await updateGitHubSecret('BASECAMP_ACCESS_TOKEN', activeAccessToken);
+            }
+            if (activeRefreshToken) {
+                await updateGitHubSecret('BASECAMP_REFRESH_TOKEN', activeRefreshToken);
+            }
+            
             tokenRefreshPromise = null; // 🔓 Unlock the door
             return true;
 
@@ -76,7 +85,7 @@ async function refreshBasecampToken(): Promise<boolean> {
 }
 
 // Brought over from your original index.ts!
-async function updateGitHubSecret(secretName: string, secretValue: string) {
+export async function updateGitHubSecret(secretName: string, secretValue: string) {
     const owner = process.env.REPO_OWNER;
     const repo = process.env.REPO_NAME;
     const githubToken = process.env.MY_GITHUB_PAT;
@@ -168,24 +177,18 @@ export async function fetchBasecampTasks(projectId: string) {
 // 4. AI TOOLS (Phase 4 Adapter)
 // ---------------------------------------------------------
 
-/**
- * BASECAMP ADAPTER: Updates a Basecamp project with GitHub commit details.
- */
-// 🚨 Notice we added `isRetry: boolean = false` to the arguments!
 export async function syncCommitToTask_Basecamp(projectName: string, commitMessage: string, developerName: string, isRetry: boolean = false): Promise<string> {
     console.log(`\n⚙️ --- BASECAMP ADAPTER EXECUTED --- ⚙️`);
     console.log(`🎯 Searching Basecamp for Project: '${projectName}'...`);
 
     const accountId = process.env.BASECAMP_ACCOUNT_ID;
 
-    // 🛡️ Ensure we have the account ID and the LIVE token in memory
     if (!accountId || !activeAccessToken) {
         console.error("❌ Missing BASECAMP_ACCOUNT_ID or Access Token.");
         return "Failed: Missing credentials.";
     }
 
     try {
-        // 1. Fetch all projects using the active memory token
         const projRes = await fetch(`https://3.basecampapi.com/${accountId}/projects.json`, { 
             method: 'GET',
             headers: {
@@ -195,29 +198,24 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
             }
         });
 
-        // 🛡️ THE INTERCEPTOR: Catch the 401 and self-heal!
         if (projRes.status === 401 && !isRetry) {
             console.log(`⚠️ Basecamp returned 401 Unauthorized during commit sync.`);
             const refreshed = await refreshBasecampToken();
             
             if (refreshed) {
                 console.log(`🔄 Retrying commit sync with new token...`);
-                // Call itself again with the fresh token
                 return await syncCommitToTask_Basecamp(projectName, commitMessage, developerName, true); 
             } else {
                 return "Failed: OAuth Token Expired and Refresh Failed."; 
             }
         }
 
-        // 🛡️ THE CRASH PREVENTER: Stop immediately if we didn't get a 200 OK
         if (!projRes.ok) {
             console.error(`❌ Basecamp API returned status: ${projRes.status}`);
             return `Failed: Basecamp API error ${projRes.status}`;
         }
 
         const projects = await projRes.json();
-
-        // Match the name (made case-insensitive to be extra safe)
         const targetProject = projects.find((p: any) => p.name.toLowerCase() === projectName.toLowerCase());
 
         if (!targetProject) {
@@ -226,8 +224,6 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
         }
 
         console.log(`✅ Found Project ID: ${targetProject.id}`);
-
-        // 2. Find the project's Campfire (Chat room) API endpoint
         const campfire = targetProject.dock.find((tool: any) => tool.name === 'chat' || tool.name === 'campfire');
 
         if (!campfire) {
@@ -235,7 +231,6 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
              return "Failed: This Basecamp project does not have a Campfire chat room.";
         }
 
-        // 3. Post the commit message to the Campfire!
         const postUrl = campfire.url.replace('.json', '/lines.json');
         
         const messagePayload = {
@@ -245,7 +240,7 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
         const postRes = await fetch(postUrl, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${activeAccessToken}`, // Use live token here too!
+                'Authorization': `Bearer ${activeAccessToken}`, 
                 'User-Agent': 'Tron Automation Agent (your@email.com)',
                 'Content-Type': 'application/json'
             },
@@ -267,7 +262,6 @@ export async function syncCommitToTask_Basecamp(projectName: string, commitMessa
     }
 }
 
-// 🚨 Notice we added `isRetry: boolean = false` to the arguments!
 export async function completeTask_Basecamp(projectId: string, taskId: string, isRetry: boolean = false): Promise<boolean> {
     console.log(`\n⚙️ --- BASECAMP ADAPTER: COMPLETING TASK --- ⚙️`);
     console.log(`🎯 Target Project ID: ${projectId}`);
@@ -284,14 +278,12 @@ export async function completeTask_Basecamp(projectId: string, taskId: string, i
         const response = await fetch(`https://3.basecampapi.com/${accountId}/buckets/${projectId}/todos/${taskId}/completion.json`, {
             method: 'POST',
             headers: {
-                // 🛡️ THE FIX: Use activeAccessToken, NOT process.env!
                 'Authorization': `Bearer ${activeAccessToken}`, 
                 'Content-Type': 'application/json',
                 'User-Agent': 'Tron Automation Agent (your@email.com)'
             }
         });
 
-        // 🛡️ THE INTERCEPTOR: Catch the 401 and retry!
         if (response.status === 401 && !isRetry) {
             console.log(`⚠️ Basecamp returned 401 Unauthorized for Task Completion.`);
             const refreshed = await refreshBasecampToken();
@@ -317,7 +309,6 @@ export async function completeTask_Basecamp(projectId: string, taskId: string, i
     }
 }
 
-// 🚨 The "Undo" Function
 export async function uncompleteTask_Basecamp(projectId: string, taskId: string, isRetry: boolean = false): Promise<boolean> {
     console.log(`\n⚙️ --- BASECAMP ADAPTER: UN-COMPLETING TASK --- ⚙️`);
     console.log(`🎯 Target Project ID: ${projectId}`);
@@ -332,7 +323,7 @@ export async function uncompleteTask_Basecamp(projectId: string, taskId: string,
 
     try {
         const response = await fetch(`https://3.basecampapi.com/${accountId}/buckets/${projectId}/todos/${taskId}/completion.json`, {
-            method: 'DELETE', // 🗑️ The magic difference!
+            method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${activeAccessToken}`, 
                 'Content-Type': 'application/json',
@@ -340,7 +331,6 @@ export async function uncompleteTask_Basecamp(projectId: string, taskId: string,
             }
         });
 
-        // 🛡️ THE INTERCEPTOR: Catch the 401 and retry!
         if (response.status === 401 && !isRetry) {
             console.log(`⚠️ Basecamp returned 401 Unauthorized for Task Un-Completion.`);
             const refreshed = await refreshBasecampToken();
@@ -353,7 +343,6 @@ export async function uncompleteTask_Basecamp(projectId: string, taskId: string,
             }
         }
 
-        // Basecamp often returns 204 No Content for a successful DELETE
         if (response.ok || response.status === 204) {
             console.log(`✅ Status: Task ${taskId} successfully un-checked in Basecamp!`);
             return true;
@@ -381,21 +370,19 @@ export async function searchBasecampProject(targetProjectName: string, isRetry: 
         const response = await fetch(`https://3.basecampapi.com/${accountId}/projects.json`, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${activeAccessToken}`, // Use the active memory token!
+                'Authorization': `Bearer ${activeAccessToken}`,
                 'User-Agent': 'Tron Automation Agent (your@email.com)'
             }
         });
 
-        // 🛡️ THE INTERCEPTOR: Catch the 401!
         if (response.status === 401 && !isRetry) {
             console.log(`⚠️ Basecamp returned 401 Unauthorized.`);
             const refreshed = await refreshBasecampToken();
             
             if (refreshed) {
-                // If the refresh worked, recursively call this exact function again!
                 return await searchBasecampProject(targetProjectName, true); 
             } else {
-                return null; // Refresh failed, give up.
+                return null; 
             }
         }
 
@@ -423,7 +410,6 @@ export async function searchBasecampProject(targetProjectName: string, isRetry: 
     }
 }
 
-// 📢 POST PR SUMMARY TO CAMPFIRE
 export async function postPRSummaryToBasecamp(projectName: string, prTitle: string, developerName: string, summary: string, prUrl: string, isRetry: boolean = false): Promise<boolean> {
     console.log(`\n📢 --- ROUTING PR SUMMARY TO BASECAMP --- 📢`);
     
@@ -443,7 +429,6 @@ export async function postPRSummaryToBasecamp(projectName: string, prTitle: stri
             }
         });
 
-        // 🛡️ THE INTERCEPTOR: Catch the 401 and self-heal!
         if (projRes.status === 401 && !isRetry) {
             console.log(`⚠️ Basecamp returned 401 Unauthorized during PR sync.`);
             const refreshed = await refreshBasecampToken();
@@ -468,7 +453,6 @@ export async function postPRSummaryToBasecamp(projectName: string, prTitle: stri
 
         const postUrl = campfire.url.replace('.json', '/lines.json');
         
-        // 🎨 Format the message beautifully for the PMs
         const messagePayload = {
             content: `🧠 **Tron AI Update: New Pull Request**\n**Developer:** ${developerName}\n**Feature:** ${prTitle}\n\n**Executive Summary:**\n${summary}\n\n🔗 <a href="${prUrl}">View PR on GitHub</a>`
         };
@@ -495,3 +479,61 @@ export async function postPRSummaryToBasecamp(projectName: string, prTitle: stri
         return false;
     }
 }
+
+export async function fetchWeeklyCompletedTasks_Basecamp(projectId: string, isRetry: boolean = false): Promise<any[]> {
+    console.log(`\n📅 Fetching 7-day timeline for Project ID: ${projectId}`);
+    const accountId = process.env.BASECAMP_ACCOUNT_ID;
+
+    if (!accountId || !activeAccessToken) return [];
+
+    try {
+        const response = await fetch(`https://3.basecampapi.com/${accountId}/projects/${projectId}/timeline.json`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${activeAccessToken}`,
+                'User-Agent': 'Tron Automation Agent (your@email.com)'
+            }
+        });
+
+        // 🛡️ The Auto-Refresh Interceptor
+        if (response.status === 401 && !isRetry) {
+            const refreshed = await refreshBasecampToken();
+            if (refreshed) return await fetchWeeklyCompletedTasks_Basecamp(projectId, true);
+            return [];
+        }
+
+        if (!response.ok) return [];
+
+        const allEvents = await response.json();
+        
+        // Calculate exactly 7 days ago
+        const lastWeek = new Date();
+        lastWeek.setDate(lastWeek.getDate() - 7);
+
+        // Filter for tasks completed in the last 7 days
+        const completedTasks = allEvents.filter((event: any) => {
+            const eventDate = new Date(event.created_at);
+            // Basecamp uses "completed" for the action when a to-do is checked off
+            return eventDate >= lastWeek && event.action === 'completed'; 
+        });
+
+        console.log(`✅ Found ${completedTasks.length} tasks completed this week!`);
+        return completedTasks;
+
+    } catch (error: any) {
+        console.error(`❌ Error fetching Basecamp timeline: ${error.message}`);
+        return [];
+    }
+}
+
+// ---------------------------------------------------------
+// 🔌 THE PLUG-AND-PLAY EXPORT (The Strategy Implementation)
+// ---------------------------------------------------------
+export const BasecampAdapter: PMAdapter = {
+    searchProject: searchBasecampProject,
+    completeTask: completeTask_Basecamp,
+    uncompleteTask: uncompleteTask_Basecamp,
+    syncCommit: syncCommitToTask_Basecamp,
+    postPRSummary: postPRSummaryToBasecamp,
+    fetchWeeklyCompletedTasks: fetchWeeklyCompletedTasks_Basecamp
+};

@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import * as dotenv from 'dotenv';
 import { createIssue_GitHub } from './github';
-import { syncCommitToTask_Basecamp } from './basecamp';
+import { syncCommitToTask_Basecamp } from './adapters/basecamp';
 
 dotenv.config();
 
@@ -256,5 +256,60 @@ export async function generatePRSummary(prTitle: string, developerName: string, 
     } catch (error: any) {
         console.error("❌ OpenRouter API Error:", error.message);
         return "Tron encountered an error while trying to summarize this PR.";
+    }
+}
+
+export async function generateWeeklyChangelog(projectName: string, completedTasks: any[]): Promise<string> {
+    console.log(`\n🧠 --- TRON NLP: GENERATING WEEKLY CHANGELOG --- 🧠`);
+    
+    if (!completedTasks || completedTasks.length === 0) {
+        return `**Weekly Update:** No tasks were completed in ${projectName} this week.`;
+    }
+
+    // Format the tasks into a readable list for the AI
+    const taskList = completedTasks.map(t => `- ${t.title || t.content} (Completed at: ${t.created_at})`).join('\n');
+
+    const prompt = `
+    You are Tron, the Chief of Staff for an engineering team. 
+    It is Friday afternoon, and you are writing the "Weekly Velocity Report" for the project: ${projectName}.
+    
+    Below is the raw list of tasks the team completed this week. 
+    Your job is to read this list and write a highly engaging, professional, and encouraging summary of what the team achieved.
+    
+    RULES:
+    1. Start with a short, encouraging introductory sentence.
+    2. Group similar tasks together if it makes sense (e.g., "Bug Fixes", "New Features").
+    3. Do NOT just repeat the list. Summarize the *impact* of the work.
+    4. Keep the tone professional but energetic (use a few emojis).
+    5. End with a sign-off wishing the team a great weekend.
+
+    COMPLETED TASKS THIS WEEK:
+    ${taskList}
+    `;
+
+    try {
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "openrouter/free",
+                messages: [{ role: "user", content: prompt }]
+            })
+        });
+
+        const data = await response.json();
+        
+        if (data.choices && data.choices.length > 0) {
+            console.log(`✅ Weekly Changelog successfully generated!`);
+            return data.choices[0].message.content.trim();
+        } else {
+            return "Tron could not generate the weekly summary.";
+        }
+    } catch (error: any) {
+        console.error("❌ OpenRouter API Error:", error.message);
+        return "Tron encountered an error while generating the weekly report.";
     }
 }
