@@ -11,6 +11,72 @@ import { JiraAdapter } from './adapters/jira';
 import { postToDiscord } from './discord';
 import { cleanAndTruncateDiff } from './utils';
 
+// ---------------------------------------------------------
+// 🧠 TRON'S MEMORY BANK: Idempotency Cache
+// ---------------------------------------------------------
+// Stores webhook IDs and the time they were received
+const processedWebhooks = new Map<string, number>();
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes (Webhooks older than 10 mins are forgotten)
+
+function isDuplicateWebhook(webhookId: string): boolean {
+    const now = Date.now();
+    
+    // 🧹 Self-Cleaning: Erase old memories so the server doesn't run out of RAM
+    for (const [id, timestamp] of processedWebhooks.entries()) {
+        if (now - timestamp > CACHE_TTL_MS) {
+            processedWebhooks.delete(id);
+        }
+    }
+
+    // 🛑 The Circuit Breaker: If we remember this ID, it's a duplicate!
+    if (processedWebhooks.has(webhookId)) {
+        return true;
+    }
+
+    // Otherwise, remember it for next time
+    processedWebhooks.set(webhookId, now);
+    return false;
+}
+
+// ---------------------------------------------------------
+// ⏳ THE RESILIENCE ENGINE: Fetch with Exponential Backoff
+// ---------------------------------------------------------
+async function fetchWithRetry(url: string, options: any, maxRetries = 3): Promise<Response> {
+    let attempt = 0;
+    let delayMs = 1000; // Start with a 1-second delay
+
+    while (attempt < maxRetries) {
+        try {
+            const response = await fetch(url, options);
+
+            // If it succeeds, or if it's a guaranteed user error (like 400 Bad Request, 401, 403, 404), 
+            // do NOT retry. Only retry on server crashes (5xx) or rate limits (429).
+            if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+                return response;
+            }
+
+            console.log(`⚠️ [RETRY ENGINE] API returned ${response.status}. Retrying in ${delayMs / 1000}s... (Attempt ${attempt + 1}/${maxRetries})`);
+        } catch (error: any) {
+            // This catches pure network disconnects (fetch failed)
+            console.log(`⚠️ [RETRY ENGINE] Network failure: ${error.message}. Retrying in ${delayMs / 1000}s... (Attempt ${attempt + 1}/${maxRetries})`);
+        }
+
+        attempt++;
+        if (attempt >= maxRetries) {
+            console.error(`❌ [RETRY ENGINE] Max retries (${maxRetries}) reached for ${url}. Giving up.`);
+            throw new Error(`Failed to fetch after ${maxRetries} attempts`);
+        }
+
+        // 🛑 Pause the execution for 'delayMs' milliseconds
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        
+        // 📈 Exponential Backoff: Double the wait time for the next attempt (1s -> 2s -> 4s)
+        delayMs *= 2; 
+    }
+    
+    throw new Error("Unreachable");
+}
+
 // 🔌 THE PLUG-AND-PLAY REGISTRY
 const adapterRegistry: Record<string, PMAdapter> = {
     'basecamp': BasecampAdapter,
@@ -86,6 +152,13 @@ function verifyGitHubSignature(req: any): boolean {
     }
 }
 
+// ---------------------------------------------------------
+// 💓 HEALTH CHECK: Google Cloud Run Heartbeat
+// ---------------------------------------------------------
+app.get('/health', (req, res) => {
+    res.status(200).send('Tron is alive, awake, and ready.');
+});
+
 // ROUTE 1: The Daily Standup Generator
 app.post('/webhook', async (req, res) => {
     console.log('\n📥 ALERT: Received a manual webhook to generate daily standup!');
@@ -103,6 +176,13 @@ app.post('/webhook', async (req, res) => {
     } catch (error) {
         console.error("❌ Error:", error);
     }
+});
+
+// ---------------------------------------------------------
+// 💓 HEALTH CHECK: Google Cloud Run Heartbeat
+// ---------------------------------------------------------
+app.get('/health', (req, res) => {
+    res.status(200).send('Tron is alive, awake, and ready.');
 });
 
 // ---------------------------------------------------------
@@ -265,7 +345,7 @@ async function syncGitHubIssueState(basecampTaskId: string, targetState: 'open' 
         // We use state=all so we can find the issue whether it's currently open or closed.
         const issuesUrl = `https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=100`;
 
-        const issuesRes = await fetch(issuesUrl, {
+        const issuesRes = await fetchWithRetry(issuesUrl, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${process.env.MY_GITHUB_PAT}`,
@@ -296,7 +376,7 @@ async function syncGitHubIssueState(basecampTaskId: string, targetState: 'open' 
         console.log(`🔍 Found matching GitHub Issue: #${issueNumber}. Setting state to '${targetState}'...`);
 
         // 3. Patch the issue with the new state
-        const patchRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`, {
+        const patchRes = await fetchWithRetry(`https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`, {
             method: 'PATCH',
             headers: {
                 'Authorization': `Bearer ${process.env.MY_GITHUB_PAT}`,
@@ -317,6 +397,13 @@ async function syncGitHubIssueState(basecampTaskId: string, targetState: 'open' 
     }
 }
 
+// ---------------------------------------------------------
+// 💓 HEALTH CHECK: Google Cloud Run Heartbeat
+// ---------------------------------------------------------
+app.get('/health', (req, res) => {
+    res.status(200).send('Tron is alive, awake, and ready.');
+});
+
 app.post('/pm-webhook/:provider', async (req, res) => {
     
     // 🛑 THE UNIVERSAL IRON GATE
@@ -332,6 +419,29 @@ app.post('/pm-webhook/:provider', async (req, res) => {
     }
 
     res.status(200).send('Webhook received'); // Acknowledge quickly
+
+    // ---------------------------------------------------------
+    // 🛑 CIRCUIT BREAKER: Trap Duplicate Webhooks
+    // ---------------------------------------------------------
+    let uniqueDeliveryId = "";
+
+    if (req.params.provider === 'github') {
+        // GitHub sends a guaranteed unique delivery ID in the headers
+        uniqueDeliveryId = req.headers['x-github-delivery'] as string || `gh_${Date.now()}`;
+    } else if (req.params.provider === 'basecamp') {
+        // Basecamp doesn't send a header ID, so we create a unique fingerprint
+        // based on the task ID, the event kind, and the project ID
+        const taskId = req.body.recording?.id || "unknown";
+        const kind = req.body.kind || "unknown";
+        const projectId = req.body.bucket?.id || "unknown";
+        uniqueDeliveryId = `bc_${projectId}_${taskId}_${kind}`;
+    }
+
+    // Check the memory bank!
+    if (isDuplicateWebhook(uniqueDeliveryId)) {
+        console.log(`\n🛡️ [CIRCUIT BREAKER] Blocked duplicate webhook delivery: ${uniqueDeliveryId}`);
+        return res.status(200).send("Duplicate ignored"); // Tell the provider "We got it" so they stop retrying
+    }
 
     const provider = req.params.provider; 
     const kind = req.body.kind || "unknown_event";
@@ -446,16 +556,30 @@ cron.schedule('0 17 * * 5', async () => {
     timezone: "Asia/Kolkata"
 });
 
-app.listen(PORT, () => {
-    // 🛟 GLOBAL SAFETY NET: Prevent the server from crashing if an unknown error occurs
-    process.on('uncaughtException', (error) => {
-        console.error('🚨 [CRITICAL] Uncaught Exception caught! Server stays alive.', error);
-    });
-
-    process.on('unhandledRejection', (reason, promise) => {
-        console.error('🚨 [CRITICAL] Unhandled Promise Rejection caught! Server stays alive.', reason);
-    });
+const server = app.listen(PORT, () => {
     console.log(`🚀 Tron Universal Router is awake at http://localhost:${PORT}`);
     console.log(`👂 Listening for VCS events at /github-webhook`);
     console.log(`👂 Listening for PM events at /pm-webhook/:provider`);
+    console.log(`🛡️  Iron Gate Security: ENABLED`);
+    console.log(`🧠 Circuit Breaker: ACTIVE`);
+    console.log(`⏳ Resilience Engine: ONLINE`);
+});
+
+// 🛟 GLOBAL SAFETY NET: Prevent the server from crashing if an unknown error occurs
+process.on('uncaughtException', (error) => {
+    console.error('🚨 [CRITICAL] Uncaught Exception caught! Server stays alive.', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🚨 [CRITICAL] Unhandled Promise Rejection caught! Server stays alive.', reason);
+});
+
+// 🛑 GRACEFUL SHUTDOWN: Cloud Run Scale-to-Zero Handler
+// When Google Cloud Run scales down to save money, it sends a SIGTERM signal.
+process.on('SIGTERM', () => {
+    console.log('☁️ [CLOUD RUN] SIGTERM signal received. Initiating graceful shutdown...');
+    server.close(() => {
+        console.log('💤 Server connection closed. All tasks completed.');
+        process.exit(0);
+    });
 });
