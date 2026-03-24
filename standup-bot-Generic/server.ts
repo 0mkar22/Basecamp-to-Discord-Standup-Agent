@@ -160,7 +160,7 @@ app.post('/github-webhook', async (req, res) => {
         const repoName = req.body?.repository?.name; 
 
         // 🛡️ THE BULLETPROOF REGEX
-        const regex = new RegExp("", "i");
+        const regex = /Basecamp Task ID:\s*(\d+)/i;
         const idMatch = issueBody.match(regex);
 
         if (idMatch !== null && idMatch[1]) {
@@ -250,6 +250,73 @@ app.post('/github-webhook', async (req, res) => {
 // ---------------------------------------------------------
 // ROUTE 3: Universal PM Webhook (PM -> Dev Flow)
 // ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// 🐙 THE REVERSE SYNC: Direct Issue API Fetch (Bypasses Search API)
+// ---------------------------------------------------------
+async function syncGitHubIssueState(basecampTaskId: string, targetState: 'open' | 'closed') {
+    const owner = process.env.REPO_OWNER || "0mkar22"; 
+    const repo = "Basecamp-to-Discord-Standup-Agent"; 
+    
+    console.log(`\n🔄 [REVERSE SYNC] Fetching issues to find Basecamp ID: ${basecampTaskId}...`);
+
+    try {
+        // 1. BYPASS SEARCH API: Grab the list of issues directly from the repo.
+        // We use state=all so we can find the issue whether it's currently open or closed.
+        const issuesUrl = `https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=100`;
+
+        const issuesRes = await fetch(issuesUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${process.env.MY_GITHUB_PAT}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'Tron-Universal-Router'
+            }
+        });
+
+        if (!issuesRes.ok) {
+            const errorData = await issuesRes.json();
+            console.error(`❌ GitHub Issues API Error: ${issuesRes.status} - ${errorData.message}`);
+            return;
+        }
+
+        const issues = await issuesRes.json();
+
+        // 2. Perform a fast local search to hunt down the Basecamp ID
+        const matchingIssue = issues.find((issue: any) => 
+            issue.body && issue.body.includes(basecampTaskId)
+        );
+
+        if (!matchingIssue) {
+            console.log(`🤷‍♂️ No GitHub issue found containing Basecamp ID ${basecampTaskId}. Skipping.`);
+            return;
+        }
+
+        const issueNumber = matchingIssue.number;
+        console.log(`🔍 Found matching GitHub Issue: #${issueNumber}. Setting state to '${targetState}'...`);
+
+        // 3. Patch the issue with the new state
+        const patchRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${process.env.MY_GITHUB_PAT}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ state: targetState })
+        });
+
+        if (patchRes.ok) {
+            console.log(`✅ [REVERSE SYNC] Successfully marked GitHub Issue #${issueNumber} as ${targetState.toUpperCase()}!`);
+        } else {
+            console.error(`❌ Failed to update GitHub issue. Status: ${patchRes.status}`);
+        }
+
+    } catch (error: any) {
+        console.error(`❌ Error during Reverse Sync: ${error.message}`);
+    }
+}
+
 app.post('/pm-webhook/:provider', async (req, res) => {
     
     // 🛑 THE UNIVERSAL IRON GATE
@@ -265,8 +332,8 @@ app.post('/pm-webhook/:provider', async (req, res) => {
     }
 
     res.status(200).send('Webhook received'); // Acknowledge quickly
+
     const provider = req.params.provider; 
-    
     const kind = req.body.kind || "unknown_event";
     const creator = req.body.creator?.name || req.body.creator || "Someone";
     
@@ -278,6 +345,32 @@ app.post('/pm-webhook/:provider', async (req, res) => {
     const projectName = req.body.recording?.bucket?.name || req.body.projectName;
     const taskContent = req.body.recording?.title || req.body.recording?.content || req.body.taskContent || "New item created";
     const taskId = req.body.recording?.id || "unknown_id";
+
+    // ---------------------------------------------------------
+    // 🔄 REVERSE SYNC INTERCEPTOR: Basecamp -> GitHub
+    // ---------------------------------------------------------
+    if (req.params.provider === 'basecamp' && (req.body.kind === 'todo_completed' || req.body.kind === 'todo_uncompleted')) {
+        const taskTitle = req.body.recording?.content || "Unknown Task";
+        const basecampTaskId = req.body.recording?.id; 
+        
+        // 🎛️ Map the Basecamp event to the GitHub state
+        const targetState = req.body.kind === 'todo_completed' ? 'closed' : 'open';
+        
+        console.log(`\n🎯 [BASECAMP EVENT] Task ${targetState === 'closed' ? 'Checked' : 'Un-checked'}: ${taskTitle} (ID: ${basecampTaskId})`);
+        
+        if (basecampTaskId) {
+            // Pass the ID and the dynamic state to our function!
+            await syncGitHubIssueState(basecampTaskId.toString(), targetState);
+        } else {
+            console.log(`🤷‍♂️ Basecamp payload did not contain a task ID. Skipping.`);
+        }
+        
+        // 🛑 THE FOOLPROOF EXPRESS FIX
+        if (!res.headersSent) {
+            res.status(200).send("Reverse sync processed"); 
+        }
+        return; 
+    }
     
     // 🛡️ THE BOUNCER: Ignore everything except actual task creations!
     if (provider === "basecamp" && kind !== "todo_created") {

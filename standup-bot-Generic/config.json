@@ -1,7 +1,7 @@
 {
   "authorized_repos": [
      {
-      "githubRepo": "Basecamp-to-Discord-Standup-Agent",
+      "githubRepo": "Project-Management-Software-to-VCS-Bridging-Bot",
       "pmProvider": "basecamp",
       "pmProjectName": "Test for basecamp to discord standup agent" 
     },

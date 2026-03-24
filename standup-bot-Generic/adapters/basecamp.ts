@@ -367,11 +367,11 @@ export async function searchBasecampProject(targetProjectName: string, isRetry: 
     }
 
     try {
-        const response = await fetch(`https://3.basecampapi.com/${accountId}/projects.json`, {
+        const response = await fetch(`https://3.basecampapi.com/${accountId?.trim()}/projects.json`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${activeAccessToken}`,
-                'User-Agent': 'Tron Automation Agent (your@email.com)'
+                'User-Agent': 'Tron Automation Agent (obhogate48@gmail.com)'
             }
         });
 
