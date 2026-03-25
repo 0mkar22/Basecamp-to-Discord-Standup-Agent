@@ -430,17 +430,22 @@ app.post('/pm-webhook/:provider', async (req, res) => {
         uniqueDeliveryId = req.headers['x-github-delivery'] as string || `gh_${Date.now()}`;
     } else if (req.params.provider === 'basecamp') {
         // Basecamp doesn't send a header ID, so we create a unique fingerprint
-        // based on the task ID, the event kind, and the project ID
         const taskId = req.body.recording?.id || "unknown";
         const kind = req.body.kind || "unknown";
-        const projectId = req.body.bucket?.id || "unknown";
-        uniqueDeliveryId = `bc_${projectId}_${taskId}_${kind}`;
+        // 🎯 THE FIX: Add the exact event timestamp to the fingerprint!
+        const eventTime = req.body.created_at || Date.now(); 
+        uniqueDeliveryId = `bc_${taskId}_${kind}_${eventTime}`;
     }
 
     // Check the memory bank!
     if (isDuplicateWebhook(uniqueDeliveryId)) {
         console.log(`\n🛡️ [CIRCUIT BREAKER] Blocked duplicate webhook delivery: ${uniqueDeliveryId}`);
-        return res.status(200).send("Duplicate ignored"); // Tell the provider "We got it" so they stop retrying
+        
+        // 🛑 THE FOOLPROOF EXPRESS FIX
+        if (!res.headersSent) {
+            res.status(200).send("Duplicate ignored"); 
+        }
+        return; // 🛑 Mandatory hard stop so it doesn't fall down to line 443!
     }
 
     const provider = req.params.provider; 
