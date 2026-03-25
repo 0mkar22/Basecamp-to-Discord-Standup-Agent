@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 3000
 
 # Start the Tron Universal Router
-CMD ["npx", "ts-node", "standup-bot-Generic/server.ts"]
+CMD ["npx", "ts-node", "--transpile-only", "standup-bot-Generic/server.ts"]
